@@ -34,11 +34,13 @@ def start_deepgram():
 
     def on_transcript(self, result, **kwargs):
         try:
+            if not result.is_final:
+                return
             transcript = result.channel.alternatives[0].transcript
             if transcript.strip():
                 print(f"\n[Deepgram] {transcript}\n")
         except Exception as e:
-            print(f"[Deepgram] Error parsing transcript: {e}")
+            print(f"[Deepgram] Error: {e}")
 
     def on_open(self, open, **kwargs):
         print("[Deepgram] Connection open, streaming...")
@@ -56,7 +58,7 @@ def start_deepgram():
     dg_connection.on(LiveTranscriptionEvents.Close, on_close)
 
     options = LiveOptions(
-        model="nova-2",
+        model="nova-3",
         language="en",
         encoding="linear16",
         sample_rate=SAMPLE_RATE,
