@@ -4,6 +4,8 @@ import struct
 from collections import deque
 import threading
 import time
+from dotenv import load_dotenv
+import os
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from deepgram import (
@@ -16,7 +18,9 @@ from deepgram import (
 DEVICE_NAME = "ESP32-Audio"
 AUDIO_CHARACTERISTIC_UUID = "12345678-1234-1234-1234-123456789abc"
 SAMPLE_RATE = 16000
-DEEPGRAM_API_KEY = "57490a6b4c360d6736e21b34c716649943e5e0a2"  # replace with your key
+
+load_dotenv()
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 
 # ── Shared state ──────────────────────────────────────────────────────────────
 WINDOW = 1600
