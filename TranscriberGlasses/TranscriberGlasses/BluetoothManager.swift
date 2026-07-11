@@ -34,7 +34,7 @@ final class BluetoothManager: NSObject, ObservableObject {
     private let apiKey: String
     private let peripheralName = "ESP32-Audio"
     private let audioCharacteristicUUID = CBUUID(string: "12345678-1234-1234-1234-123456789abc")
-    private let deepgramURL = URL(string: "wss://api.deepgram.com/v1/listen?model=nova-3&language=en&encoding=linear16&sample_rate=16000&channels=1&interim_results=true&utterance_end_ms=1000")!
+    private let deepgramURL = URL(string: "wss://api.deepgram.com/v1/listen?model=nova-3&language=en&encoding=linear16&sample_rate=16000&channels=1&interim_results=true&utterance_end_ms=500")!
 
     private var centralManager: CBCentralManager?
     private var audioPeripheral: CBPeripheral?
