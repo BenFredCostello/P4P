@@ -19,6 +19,20 @@ final class BluetoothManager: NSObject, ObservableObject {
     @Published private(set) var connectionState: ConnectionState = .disconnected
     @Published private(set) var connectedPeripheralName: String?
     @Published private(set) var transcript = ""
+    @Published private(set) var interimTranscript = ""
+
+    var displayedTranscript: String {
+        switch (transcript.isEmpty, interimTranscript.isEmpty) {
+        case (true, true):
+            return ""
+        case (true, false):
+            return interimTranscript
+        case (false, true):
+            return transcript
+        case (false, false):
+            return "\(transcript) \(interimTranscript)"
+        }
+    }
 
     var connectionStatusText: String {
         switch connectionState {
@@ -34,7 +48,7 @@ final class BluetoothManager: NSObject, ObservableObject {
     private let apiKey: String
     private let peripheralName = "ESP32-Audio"
     private let audioCharacteristicUUID = CBUUID(string: "12345678-1234-1234-1234-123456789abc")
-    private let deepgramURL = URL(string: "wss://api.deepgram.com/v1/listen?model=nova-3&language=en&encoding=linear16&sample_rate=16000&channels=1&interim_results=true&utterance_end_ms=500")!
+    private let deepgramURL = URL(string: "wss://api.deepgram.com/v1/listen?model=nova-3&language=en&encoding=linear16&sample_rate=16000&channels=1&interim_results=true&utterance_end_ms=1000")!
 
     private var centralManager: CBCentralManager?
     private var audioPeripheral: CBPeripheral?
@@ -106,17 +120,25 @@ final class BluetoothManager: NSObject, ObservableObject {
 
         guard let data,
               let response = try? JSONDecoder().decode(DeepgramResponse.self, from: data),
-              response.isFinal,
-              let text = response.channel.alternatives.first?.transcript,
-              !text.isEmpty else {
+              let text = response.channel.alternatives.first?.transcript else {
             return
         }
 
         DispatchQueue.main.async {
-            if self.transcript.isEmpty {
-                self.transcript = text
+            if response.isFinal {
+                guard !text.isEmpty else {
+                    self.interimTranscript = ""
+                    return
+                }
+
+                if self.transcript.isEmpty {
+                    self.transcript = text
+                } else {
+                    self.transcript += " \(text)"
+                }
+                self.interimTranscript = ""
             } else {
-                self.transcript += " \(text)"
+                self.interimTranscript = text
             }
         }
     }

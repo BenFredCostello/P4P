@@ -104,7 +104,7 @@ struct ContentView: View {
             ScrollView {
                 Text(transcriptText)
                     .font(.body)
-                    .foregroundStyle(bluetoothManager.transcript.isEmpty ? secondaryText : primaryText)
+                    .foregroundStyle(bluetoothManager.displayedTranscript.isEmpty ? secondaryText : primaryText)
                     .lineSpacing(4)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 4)
@@ -121,11 +121,15 @@ struct ContentView: View {
     }
 
     private var transcriptText: String {
-        bluetoothManager.transcript.isEmpty ? "Waiting for final transcript..." : bluetoothManager.transcript
+        bluetoothManager.displayedTranscript.isEmpty ? "Waiting for speech..." : bluetoothManager.displayedTranscript
     }
 
     private var transcriptStateText: String {
-        bluetoothManager.transcript.isEmpty ? "Listening" : "Final text"
+        if !bluetoothManager.interimTranscript.isEmpty {
+            return "Live"
+        }
+
+        return bluetoothManager.transcript.isEmpty ? "Listening" : "Final text"
     }
 
     private var statusIconName: String {
