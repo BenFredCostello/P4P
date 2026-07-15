@@ -1,0 +1,109 @@
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+// Panel is 72x40 but the SSD1306 controller has 128x64 RAM.
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
+
+#define X_OFF 28
+#define Y_OFF 24
+#define VIS_W 72
+#define VIS_H 40
+
+#define CHARS_PER_LINE 12   // 72px / 6px per char at text size 1
+#define MAX_LINES 4         // 4 lines x 8px = 32px (5 would also fit)
+#define LINE_HEIGHT 8
+
+// Minimum letters we're willing to leave before a hyphen.
+// 2 means the smallest split is like "di-" ... "splay".
+#define MIN_SPLIT 2
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// Takes one sentence and renders it across up to MAX_LINES lines.
+// Words that overhang a line get split with a hyphen to save space.
+// Anything past line 4 is silently dropped (design constraint for now).
+void drawSentence(const String &text) {
+  String lines[MAX_LINES];
+  int line = 0;
+  unsigned int pos = 0;
+
+  while (pos < text.length() && line < MAX_LINES) {
+    // skip spaces
+    while (pos < text.length() && text[pos] == ' ') pos++;
+    if (pos >= text.length()) break;
+
+    // grab the next word (or remaining fragment of a split word)
+    int wordEnd = text.indexOf(' ', pos);
+    if (wordEnd == -1) wordEnd = text.length();
+    String word = text.substring(pos, wordEnd);
+
+    bool lineHasText = lines[line].length() > 0;
+    int sep = lineHasText ? 1 : 0;                       // space before the word
+    int space = CHARS_PER_LINE - lines[line].length();   // chars left on this line
+
+    if ((int)word.length() + sep <= space) {
+      // whole word fits
+      if (lineHasText) lines[line] += ' ';
+      lines[line] += word;
+      pos = wordEnd;
+    } else {
+      // word overhangs: hyphenate if there's room for MIN_SPLIT letters + '-'
+      int room = space - sep;
+      if (room >= MIN_SPLIT + 1) {
+        int take = room - 1;                             // leave 1 char for '-'
+        if (lineHasText) lines[line] += ' ';
+        lines[line] += word.substring(0, take) + '-';
+        pos += take;                                     // rest of word handled next pass
+      }
+      line++;                                            // move to next line either way
+    }
+  }
+
+  // render
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  for (int i = 0; i < MAX_LINES; i++) {
+    display.setCursor(X_OFF, Y_OFF + i * LINE_HEIGHT);
+    display.print(lines[i]);
+    Serial.print("Line ");
+    Serial.print(i + 1);
+    Serial.print(": [");
+    Serial.print(lines[i]);
+    Serial.println("]");
+  }
+  display.display();
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(3000);
+  Serial.println("=== OLED SKETCH V3 RUNNING ===");
+
+  Wire.begin(21, 22);
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("Display not found!");
+    while (true);
+  }
+
+  // startup flash
+  display.clearDisplay();
+  display.fillRect(X_OFF, Y_OFF, VIS_W, VIS_H, SSD1306_WHITE);
+  display.display();
+  delay(1000);
+
+  // test input - later this comes from the mic reader one sentence at a time
+  String testSentence = "Testing the microphone sentence display";
+  drawSentence(testSentence);
+
+  Serial.println("=== V3 DONE ===");
+}
+
+void loop() {
+  // later: when the mic reader hands you a sentence, just call
+  // drawSentence(theSentence); and it replaces what's on screen
+}
