@@ -58,7 +58,10 @@ size_t micReadChunk(int16_t *out, size_t maxSamples) {
   size_t frameCap = maxSamples < FRAMES_PER_CHUNK ? maxSamples : FRAMES_PER_CHUNK;
 
   size_t bytesRead = 0;
-  esp_err_t err = i2s_read(I2S_PORT, raw, frameCap * 2 * sizeof(int32_t), &bytesRead, pdMS_TO_TICKS(20));
+  // Non-blocking read so loop() can pace BLE notifications and keep the BLE
+  // host task responsive. If no complete DMA data is ready yet, return 0 and
+  // try again on the next loop iteration.
+  esp_err_t err = i2s_read(I2S_PORT, raw, frameCap * 2 * sizeof(int32_t), &bytesRead, 0);
   if (err != ESP_OK) return 0;
 
   size_t framesRead = bytesRead / (2 * sizeof(int32_t));

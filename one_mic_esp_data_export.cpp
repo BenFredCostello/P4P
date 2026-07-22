@@ -11,6 +11,7 @@
 #define SAMPLE_RATE 16000
 #define SAMPLE_BITS I2S_BITS_PER_SAMPLE_32BIT
 #define BUFFER_SAMPLES 100
+#define MAX_BLE_AUDIO_PAYLOAD 180
 
 // Match Python exactly
 #define DEVICE_NAME "ESP32-Audio"
@@ -19,6 +20,7 @@
 
 int32_t samples[BUFFER_SAMPLES];
 BLECharacteristic* pCharacteristic = nullptr;
+BLEServer* pServer = nullptr;
 bool deviceConnected = false;
 
 class ServerCallbacks : public BLEServerCallbacks {
@@ -65,7 +67,8 @@ void setupI2S() {
 void setupBLE() {
   Serial.println("[BLE] Initializing...");
   BLEDevice::init(DEVICE_NAME);
-  BLEServer* pServer = BLEDevice::createServer();
+  BLEDevice::setMTU(185);
+  pServer = BLEDevice::createServer();
   pServer->setCallbacks(new ServerCallbacks());
 
   BLEService* pService = pServer->createService(SERVICE_UUID);
@@ -74,6 +77,9 @@ void setupBLE() {
   pCharacteristic->addDescriptor(new BLE2902());
   pService->start();
 
+  BLEAdvertising* advertising = BLEDevice::getAdvertising();
+  advertising->addServiceUUID(SERVICE_UUID);
+  advertising->setScanResponse(true);
   BLEDevice::startAdvertising();
   Serial.printf("[BLE] Advertising as '%s'\n", DEVICE_NAME);
 }
@@ -115,6 +121,23 @@ void loop() {
 
   Serial.printf("[MIC] Peak: %d | Sending %d bytes\n", peak, samples_read * 2);
 
-  pCharacteristic->setValue((uint8_t*)out, samples_read * 2);
-  pCharacteristic->notify();
+  // iPhones normally allow 182 audio bytes per notification. Sending the
+  // original 200-byte packet can overflow the BLE link and disconnect it.
+  uint16_t mtu = pServer->getPeerMTU(pServer->getConnId());
+  size_t payload = mtu > 3 ? mtu - 3 : 20;
+  if (payload > MAX_BLE_AUDIO_PAYLOAD) payload = MAX_BLE_AUDIO_PAYLOAD;
+  payload &= ~((size_t)1);  // keep PCM16 samples whole
+
+  const uint8_t* audio = reinterpret_cast<const uint8_t*>(out);
+  size_t bytes_remaining = samples_read * sizeof(int16_t);
+  while (bytes_remaining > 0 && deviceConnected) {
+    size_t packet_bytes = bytes_remaining < payload ? bytes_remaining : payload;
+    pCharacteristic->setValue(audio, packet_bytes);
+    pCharacteristic->notify();
+    audio += packet_bytes;
+    bytes_remaining -= packet_bytes;
+
+    // Give the BLE task time to transmit before the next notification.
+    delay((packet_bytes / 2 * 1000 + SAMPLE_RATE - 1) / SAMPLE_RATE);
+  }
 }
