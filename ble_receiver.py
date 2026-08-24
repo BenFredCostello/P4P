@@ -84,6 +84,7 @@ def audio_callback(sender, data):
 
     if dg_ready.is_set() and dg_connection is not None:
         dg_connection.send(data)
+       
 
     now = time.time()
     if now - last_print > 0.5:

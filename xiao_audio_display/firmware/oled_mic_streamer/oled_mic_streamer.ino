@@ -11,7 +11,7 @@
 // Set this to 1 for the first stability test. The ESP sends 20 dummy bytes
 // every 100 ms and does not stream microphone audio. Once BLE and the OLED
 // remain stable, change it to 0 for real microphone audio.
-#define BLE_DUMMY_TEST 0
+#define BLE_DUMMY_TEST 1
 
 // Panel is 72x40 but the SSD1306 controller has 128x64 RAM.
 #define SCREEN_WIDTH 128
