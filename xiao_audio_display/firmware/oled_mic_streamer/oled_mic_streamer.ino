@@ -4,14 +4,20 @@
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
+
 #include "protocol.h"
 #include "transport.h"
 #include "mic.h"
 
-// Set this to 1 for the first stability test. The ESP sends 20 dummy bytes
-// every 100 ms and does not stream microphone audio. Once BLE and the OLED
-// remain stable, change it to 0 for real microphone audio.
-#define BLE_DUMMY_TEST 1
+// Audio transport. 1 = stream PCM straight over USB serial to
+// python/serial_bridge.py (reliable, no BLE). 0 = stream over BLE to the
+// iPhone app / ble_receiver.py.
+#define STREAM_AUDIO_OVER_SERIAL 1
+
+// Only used when STREAM_AUDIO_OVER_SERIAL is 0. Set to 1 for the first BLE
+// stability test: the ESP sends 20 dummy bytes every 100 ms instead of mic
+// audio. Set to 0 for real microphone audio over BLE.
+#define BLE_DUMMY_TEST 0
 
 // Panel is 72x40 but the SSD1306 controller has 128x64 RAM.
 #define SCREEN_WIDTH 128
@@ -48,8 +54,10 @@
 #define STREAM_START_DELAY_MS 1000
 #define DUMMY_INTERVAL_MS 100
 
-// About 250 ms of PCM16 mono audio at 16 kHz.
-#define AUDIO_RING_BYTES 8192
+// About 500 ms of PCM16 mono audio at 16 kHz, to absorb BLE/loop jitter.
+#define AUDIO_RING_BYTES 16384
+
+#define MIC_LR_GROUND_PIN 7   // D7, synthetic ground for mic L/R pin
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
@@ -232,6 +240,9 @@ class ServerCallbacks : public BLEServerCallbacks {
     bleConnectionChanged = true;
     notifyPending = false;
     notifyCompletionSeen = false;
+    // esp32 core 3.0.x has no BLEServer::advertiseOnDisconnect(), so restart
+    // advertising by hand here.
+    BLEDevice::startAdvertising();
   }
 };
 
@@ -242,23 +253,12 @@ class AudioCallbacks : public BLECharacteristicCallbacks {
       uint32_t code) override {
     lastNotifyErrorCode = code;
 
-    // Arduino-ESP32's NimBLE wrapper calls onStatus once inside notify() to
-    // report whether the packet was queued, then again from the NimBLE host
-    // task when transmission completes. Keep those two results separate.
-    if (notifyCallActive) {
-      notifyEnqueueAccepted =
-          status == BLECharacteristicCallbacks::Status::SUCCESS_NOTIFY;
-      // Any later callback belongs to the actual NimBLE transmit event,
-      // even if it arrives before notify() has fully returned.
-      notifyCallActive = false;
-      return;
-    }
-
-    if (!notifyPending) return;
-
-    notifyCompletionSucceeded =
+    // esp32 core 3.x's BLE stack (NimBLE-backed) calls onStatus exactly once,
+    // synchronously inside notify(), with SUCCESS_NOTIFY on success. There is
+    // no separate "transmit complete" event for notifications, so treat this
+    // single callback as the whole result.
+    notifyEnqueueAccepted =
         status == BLECharacteristicCallbacks::Status::SUCCESS_NOTIFY;
-    notifyCompletionSeen = true;
   }
 };
 
@@ -278,7 +278,6 @@ void setupBluetooth() {
 
   bleServer = BLEDevice::createServer();
   bleServer->setCallbacks(new ServerCallbacks());
-  bleServer->advertiseOnDisconnect(true);
 
   BLEService *service = bleServer->createService(SERVICE_UUID);
 
@@ -361,45 +360,31 @@ bool sendNotification(
   }
   if (notifyPending) return false;
 
-  notifyPending = true;
-  notifyCompletionSeen = false;
-  notifyCompletionSucceeded = false;
   notifyEnqueueAccepted = false;
   pendingPayloadLength = length;
   pendingPayloadUsesAudioRing = usesAudioRing;
 
-  audioCharacteristic->setValue(data, length);
-  notifyCallActive = true;
+  // esp32 core 3.x: setValue() takes a non-const uint8_t*.
+  audioCharacteristic->setValue(const_cast<uint8_t *>(data), length);
   audioCharacteristic->notify();
-  notifyCallActive = false;
 
+  // onStatus() has already run synchronously by this point and set
+  // notifyEnqueueAccepted. There is no asynchronous completion to wait for.
   if (!notifyEnqueueAccepted) {
-    notifyPending = false;
+    // Leave audio in the ring so the same bytes can be retried.
     notifyFailureCount++;
+    nextAudioSendUs = micros() + 20000;
     return false;
   }
 
+  if (usesAudioRing) removeAudioFromRing(length);
+  notifySuccessCount++;
   return true;
 }
 
 void processNotificationCompletion() {
-  if (!notifyPending || !notifyCompletionSeen) return;
-
-  bool succeeded = notifyCompletionSucceeded;
-  bool removeFromRing = pendingPayloadUsesAudioRing;
-  size_t completedLength = pendingPayloadLength;
-
-  notifyCompletionSeen = false;
-  notifyPending = false;
-
-  if (succeeded) {
-    if (removeFromRing) removeAudioFromRing(completedLength);
-    notifySuccessCount++;
-  } else {
-    // Leave audio in the ring so the same bytes can be retried.
-    notifyFailureCount++;
-    nextAudioSendUs = micros() + 20000;
-  }
+  // Notifications now complete synchronously inside sendNotification(); nothing
+  // to reconcile here. Kept so existing call sites stay valid.
 }
 
 void serviceDummyBluetooth() {
@@ -420,6 +405,20 @@ void captureMicrophoneAudio() {
 
   if (samplesRead > 0) {
     queueAudio(
+        reinterpret_cast<const uint8_t *>(audioBuffer),
+        samplesRead * sizeof(int16_t));
+  }
+}
+
+// Serial audio path: read one mic chunk and ship it straight out as a
+// framed PKT_TYPE_AUDIO packet. No ring buffer or pacing needed - USB CDC
+// easily carries 32 kB/s of PCM16.
+void streamMicrophoneToSerial() {
+  static int16_t audioBuffer[AUDIO_CHUNK_SAMPLES];
+  size_t samplesRead = micReadChunk(audioBuffer, AUDIO_CHUNK_SAMPLES);
+
+  if (samplesRead > 0) {
+    transportSendAudio(
         reinterpret_cast<const uint8_t *>(audioBuffer),
         samplesRead * sizeof(int16_t));
   }
@@ -485,6 +484,8 @@ void reportBleStatus() {
 }
 
 void setup() {
+  pinMode(MIC_LR_GROUND_PIN, OUTPUT);
+  digitalWrite(MIC_LR_GROUND_PIN, LOW);
   transportInit(SERIAL_BAUD, onSentenceReceived);
   delay(1500);
   transportSendLog("=== OLED + MIC + BLE STARTING ===");
@@ -501,7 +502,9 @@ void setup() {
     transportSendLog("Mic ready (I2S0, 16kHz mono)");
   }
 
+#if !STREAM_AUDIO_OVER_SERIAL
   setupBluetooth();
+#endif
 }
 
 void loop() {
@@ -525,7 +528,9 @@ void loop() {
   reportBleStatus();
   processDisplayQueue();
 
-#if BLE_DUMMY_TEST
+#if STREAM_AUDIO_OVER_SERIAL
+  streamMicrophoneToSerial();
+#elif BLE_DUMMY_TEST
   serviceDummyBluetooth();
 #else
   captureMicrophoneAudio();

@@ -21,7 +21,7 @@
 #define SAMPLE_RATE 16000
 #define FRAMES_PER_CHUNK 256  // samples per channel per chunk
 #define DMA_BUF_COUNT 4
-#define MIC_GAIN 8  // 8x PCM gain, about +18 dB
+#define MIC_GAIN 16  // 16x PCM gain, about +24 dB (INMP441 output is low)
 
 // DIAGNOSTIC BUILD: mono ONLY_LEFT and ONLY_RIGHT both read as constant
 // zero, so this captures both I2S slots as stereo and logs their peaks
@@ -84,7 +84,7 @@ size_t micReadChunk(int16_t *out, size_t maxSamples) {
   }
 
   for (size_t i = 0; i < framesRead; i++) {
-    int32_t sample = raw[i * 2] >> 16;  // convert 32-bit I2S to PCM16 scale
+    int32_t sample = raw[i * 2 + 1] >> 16;  // slot1 holds the mic signal; convert 32-bit I2S to PCM16 scale
     sample *= MIC_GAIN;
     sample = constrain(sample, -32768, 32767);
     out[i] = (int16_t)sample;
