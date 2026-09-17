@@ -10,9 +10,11 @@ over USB serial. See `firmware/oled_mic_streamer/` (Arduino) and `python/`
 - Displays: 2x 0.42" 72x40 SSD1306 OLEDs, both at I2C 0x3C (mirrored).
   SDA=D4 (GPIO5), SCL=D5 (GPIO6), 3V3.
 - Mic 1: INMP441-style I2S mic, I2S port 0. SCK=D0 (GPIO1), WS=D1 (GPIO2),
-  SD=D2 (GPIO3), L/R->GND (left channel), 3V3.
-- Planned, not yet wired: mic 2 shares I2S0 with L/R->3V3 (right channel);
-  mics 3+4 on I2S port 1 (SCK=D3/GPIO4, WS=D8/GPIO7, SD=D9/GPIO8).
+  SD=D2 (GPIO3), L/R->GND (left channel), GND->board GND. For the GPIO-powered
+  setup, connect mic VDD to D9 (GPIO8), which firmware drives HIGH before I2S
+  starts. Disconnect mic VDD from the board's 3V3 pin before using D9.
+- Planned, not yet wired: mic 2 shares I2S0 with L/R->3V3 (right channel).
+  Mic 3+4 I2S port 1 pins must be reassigned if D9 remains the mic 1 supply.
 
 ## Arduino setup
 

@@ -7,6 +7,7 @@
 #define I2S_PIN_SCK 1  // D0
 #define I2S_PIN_WS 2   // D1
 #define I2S_PIN_SD 3   // D2
+#define MIC_VCC_PIN 8  // GPIO8, used as the microphone's 3.3 V supply
 
 #define I2S_PORT I2S_NUM_0
 
@@ -27,6 +28,12 @@ static int32_t rawSamples[BUFFER_SAMPLES * 2];
 // ────────────────────────────────────────────────────────────
 
 void micInit() {
+  // Power the mic before enabling its I2S clocks.
+  pinMode(MIC_VCC_PIN, OUTPUT);
+  digitalWrite(MIC_VCC_PIN, HIGH);
+  delay(10);
+  Serial.println("[MIC] VCC on D9 high");
+
   Serial.println("[I2S] Installing driver...");
 
   i2s_config_t i2s_config = {

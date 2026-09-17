@@ -1,5 +1,6 @@
 #include <Arduino.h>
 
+#include "display.h"
 #include "mic.h"
 #include "transport.h"
 
@@ -8,6 +9,7 @@ int16_t audioBuffer[BUFFER_SAMPLES];
 
 void onSentence(const String& sentence) {
   Serial.printf("[TRANSCRIPT] %s\n", sentence.c_str());
+  displayShowSentence(sentence);
 }
 
 void setup() {
@@ -17,6 +19,12 @@ void setup() {
 
   Serial.println();
   Serial.println("=== ESP32-Audio ===");
+
+  if (displayInit()) {
+    Serial.println("[OLED] Ready");
+  } else {
+    Serial.println("[OLED] Not found at 0x3C");
+  }
 
   // Set up microphone / I2S.
   micInit();
@@ -28,8 +36,7 @@ void setup() {
 }
 
 void loop() {
-  // Currently does nothing for BLE,
-  // but kept as part of the transport interface.
+  // Received text is passed to onSentence here, outside the BLE callback.
   transportPoll();
 
   // Don't capture/send audio until a BLE client is connected.
