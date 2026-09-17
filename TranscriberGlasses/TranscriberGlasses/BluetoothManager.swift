@@ -127,14 +127,6 @@ final class BluetoothManager: NSObject, ObservableObject {
     // 32 kB = ~1 second of 16 kHz PCM16 mono.
     private let maximumBufferedAudioBytes = 32_000
 
-    // MARK: - OLED
-
-    private var oledUpdateWorkItem: DispatchWorkItem?
-    private var lastOledText = ""
-    private var lastOledWriteTime = Date.distantPast
-
-    private let oledUpdateInterval: TimeInterval = 0.3
-
     // MARK: - Init
 
     init(apiKey: String) {
@@ -165,18 +157,25 @@ final class BluetoothManager: NSObject, ObservableObject {
         connectedPeripheralName = nil
         connectionState = .scanning
 
+        // Match the device name in didDiscover. A service-filtered scan only
+        // returns peripherals whose advertising data includes that service.
         centralManager?.scanForPeripherals(
-            withServices: [audioCharacteristicUUID]
+            withServices: nil
         )
+
+        print("BLE scanning for \(peripheralName)")
     }
 
     private func scheduleBLEReconnect() {
         reconnectWorkItem?.cancel()
 
+        print("BLE reconnect scan scheduled")
+
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
 
             guard self.centralManager?.state == .poweredOn else {
+                print("BLE reconnect scan skipped: Bluetooth unavailable")
                 return
             }
 
@@ -652,39 +651,50 @@ final class BluetoothManager: NSObject, ObservableObject {
 
                 self.interimTranscript = ""
 
-                self.queueTranscriptForOled(
-                    text,
-                    immediately: true
-                )
+                self.sendFinalTranscriptToESP(text)
 
             } else {
 
                 self.interimTranscript = text
 
-                self.queueTranscriptForOled(
-                    text,
-                    immediately: false
-                )
             }
         }
     }
 
-    // MARK: - OLED
+    // MARK: - Transcript return
 
-    private func sendTranscriptToOled(
-        _ text: String
-    ) {
+    private func sendFinalTranscriptToESP(_ text: String) {
         guard
             let audioPeripheral,
-            let textCharacteristic
+            audioPeripheral.state == .connected,
+            let textCharacteristic,
+            textCharacteristic.properties.contains(.writeWithoutResponse)
         else {
+            print("BLE final text skipped: write-without-response characteristic unavailable")
             return
         }
 
-        let payload =
-            Data(
-                text.utf8.prefix(192)
-            )
+        // Keep each write within one negotiated ATT payload, capped at 180 bytes.
+        let maxLength = min(
+            180,
+            audioPeripheral.maximumWriteValueLength(for: .withoutResponse)
+        )
+
+        guard maxLength > 0 else {
+            print("BLE final text skipped: write length unavailable")
+            return
+        }
+
+        var payload = Data(text.utf8.prefix(maxLength))
+
+        // A byte limit can cut through a UTF-8 character.
+        while !payload.isEmpty && String(data: payload, encoding: .utf8) == nil {
+            payload.removeLast()
+        }
+
+        guard !payload.isEmpty else {
+            return
+        }
 
         audioPeripheral.writeValue(
             payload,
@@ -692,72 +702,9 @@ final class BluetoothManager: NSObject, ObservableObject {
             type: .withoutResponse
         )
 
-        print(
-            "Sent OLED text: \(text)"
-        )
-    }
-
-    private func queueTranscriptForOled(
-        _ text: String,
-        immediately: Bool
-    ) {
-        guard
-            !text.isEmpty,
-            text != lastOledText
-        else {
-            return
-        }
-
-        oledUpdateWorkItem?.cancel()
-        oledUpdateWorkItem = nil
-
-        let elapsed =
-            Date().timeIntervalSince(
-                lastOledWriteTime
-            )
-
-        let delay =
-            immediately
-            ? 0
-            : max(
-                0,
-                oledUpdateInterval - elapsed
-            )
-
-        let workItem =
-            DispatchWorkItem { [weak self] in
-
-                guard let self else {
-                    return
-                }
-
-                guard
-                    text != self.lastOledText
-                else {
-                    return
-                }
-
-                self.lastOledText = text
-                self.lastOledWriteTime = Date()
-
-                self.sendTranscriptToOled(
-                    text
-                )
-
-                self.oledUpdateWorkItem = nil
-            }
-
-        if delay == 0 {
-            workItem.perform()
-
-        } else {
-
-            oledUpdateWorkItem = workItem
-
-            DispatchQueue.main.asyncAfter(
-                deadline: .now() + delay,
-                execute: workItem
-            )
+        print("BLE final text write queued without response: \(payload.count) bytes")
+        if payload.count < text.utf8.count {
+            print("BLE final text truncated to fit one packet")
         }
     }
 }
@@ -805,8 +752,14 @@ extension BluetoothManager:
         audioPeripheral = peripheral
         peripheral.delegate = self
 
+        print(
+            "BLE found \(peripheralName): " +
+            "\(peripheral.identifier), RSSI \(RSSI)"
+        )
+
         central.stopScan()
 
+        print("BLE connecting to \(peripheral.identifier)")
         central.connect(peripheral)
     }
 
@@ -814,6 +767,8 @@ extension BluetoothManager:
         _ central: CBCentralManager,
         didConnect peripheral: CBPeripheral
     ) {
+        print("BLE connected to \(peripheral.identifier)")
+
         connectedPeripheralName =
             peripheral.name ?? peripheralName
 
@@ -827,21 +782,25 @@ extension BluetoothManager:
         didDisconnectPeripheral peripheral: CBPeripheral,
         error: Error?
     ) {
-        print(
-            "BLE disconnected: " +
-            "\(error?.localizedDescription ?? "no error reported")"
-        )
+        if let error {
+            let detail = error as NSError
+            print(
+                "BLE disconnected \(peripheral.identifier): " +
+                "\(detail.domain) code \(detail.code), " +
+                detail.localizedDescription
+            )
+        } else {
+            print(
+                "BLE disconnected \(peripheral.identifier): " +
+                "no error reported"
+            )
+        }
 
         connectedPeripheralName = nil
         connectionState = .disconnected
 
         audioCharacteristic = nil
         textCharacteristic = nil
-
-        oledUpdateWorkItem?.cancel()
-        oledUpdateWorkItem = nil
-
-        lastOledText = ""
 
         // BLE and Deepgram are independent.
         //
@@ -858,7 +817,7 @@ extension BluetoothManager:
         error: Error?
     ) {
         print(
-            "BLE connection failed: " +
+            "BLE connection failed \(peripheral.identifier): " +
             "\(error?.localizedDescription ?? "no error reported")"
         )
 
@@ -895,6 +854,8 @@ extension BluetoothManager:
             peripheral.services else {
             return
         }
+
+        print("BLE services discovered: \(services.count)")
 
         for service in services {
 
@@ -936,26 +897,14 @@ extension BluetoothManager:
                 audioCharacteristic =
                     characteristic
 
+                print("BLE audio characteristic ready")
+
             case textCharacteristicUUID:
 
                 textCharacteristic =
                     characteristic
 
-                let testMessage =
-                    Data(
-                        "iPhone connected".utf8
-                    )
-
-                peripheral.writeValue(
-                    testMessage,
-                    for: characteristic,
-                    type: .withoutResponse
-                )
-
-                print(
-                    "OLED text characteristic ready; " +
-                    "sent connection test"
-                )
+                print("BLE text characteristic ready")
 
             default:
                 break

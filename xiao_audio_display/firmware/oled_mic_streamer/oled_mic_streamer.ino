@@ -6,6 +6,10 @@
 // One chunk of PCM16 mono audio.
 int16_t audioBuffer[BUFFER_SAMPLES];
 
+void onSentence(const String& sentence) {
+  Serial.printf("[TRANSCRIPT] %s\n", sentence.c_str());
+}
+
 void setup() {
   Serial.begin(115200);
 
@@ -18,8 +22,7 @@ void setup() {
   micInit();
 
   // Set up BLE.
-  // No incoming transcript handler yet.
-  transportInit();
+  transportInit(onSentence);
 
   Serial.println("[MAIN] Waiting for connection...");
 }

@@ -2,17 +2,10 @@
 
 #include <Arduino.h>
 
-// Function that will eventually receive transcript
-// sentences sent back from the iPhone.
+// Called from loop() when a final transcript arrives from the iPhone.
 typedef void (*SentenceHandler)(const String& sentence);
 
-// Initialise the transport.
-//
-// Currently BLE.
-//
-// onSentence is optional for now.
-// We will use it when we add the BLE text
-// characteristic for incoming transcripts.
+// Initialise the BLE transport and its optional transcript handler.
 void transportInit(SentenceHandler onSentence = nullptr);
 
 // True while an iPhone / BLE central is connected.
@@ -24,12 +17,7 @@ bool transportIsConnected();
 // NOT the number of bytes.
 void transportSendAudio(const int16_t* samples, size_t sampleCount);
 
-// Allow the transport to perform any required
-// background processing.
-//
-// Nothing is required here for BLE currently,
-// but keeping this function makes the transport
-// abstraction cleaner.
+// Restart advertising when needed and deliver received transcripts in loop().
 void transportPoll();
 
 // Send debug information.
