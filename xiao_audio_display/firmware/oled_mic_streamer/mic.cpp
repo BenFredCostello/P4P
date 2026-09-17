@@ -6,8 +6,8 @@
 
 #define I2S_PIN_SCK 1  // D0
 #define I2S_PIN_WS 2   // D1
-#define I2S_PIN_SD 3   // D2
-#define MIC_VCC_PIN 8  // GPIO8, used as the microphone's 3.3 V supply
+#define I2S_PIN_SD 8   // D2
+#define MIC_VCC_PIN 3  // GPIO8, used as the microphone's 3.3 V supply
 
 #define I2S_PORT I2S_NUM_0
 
