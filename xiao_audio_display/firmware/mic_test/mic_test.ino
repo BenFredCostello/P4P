@@ -14,12 +14,12 @@
 #define SAMPLE_RATE 16000
 
 // Number of mono samples sent per read.
-// 100 samples @ 16 kHz = 6.25 ms audio.
+// 90 samples @ 16 kHz = 5.625 ms of audio. also 90 x 2 bytes = 180 bytes, which is under the max BLE payload size (185) for iOS.
 #define BUFFER_SAMPLES 90
 
 #define MIC_GAIN 16
 
-#define MAX_BLE_AUDIO_PAYLOAD 180
+#define MAX_BLE_AUDIO_PAYLOAD 180 
 
 // ── BLE config ────────────────────────────────────────────────────────────────
 #define DEVICE_NAME "ESP32-Audio"

@@ -1,10 +1,33 @@
 #pragma once
+
 #include <Arduino.h>
 
-// I2S capture for mic 1 (I2S port 0). 16kHz mono, delivered as 16-bit PCM.
+// Audio sample rate expected by Deepgram.
+#define SAMPLE_RATE 16000
 
-bool micInit();
+// 90 PCM16 samples = 180 bytes.
+//
+// At 16 kHz:
+// 90 / 16000 = 5.625 ms of audio.
+//
+// 180 bytes also fits neatly inside the BLE
+// audio payload we're currently using.
+#define BUFFER_SAMPLES 90
 
-// Reads up to maxSamples int16 samples into `out`. Returns the number of
-// samples actually read (0 if none were ready). Safe to call every loop().
-size_t micReadChunk(int16_t *out, size_t maxSamples);
+// Initialise the INMP441 / I2S peripheral.
+void micInit();
+
+// Read one chunk from the microphone.
+//
+// output:
+//     destination PCM16 mono buffer
+//
+// maxSamples:
+//     capacity of output buffer
+//
+// peak:
+//     optional peak amplitude output
+//
+// Returns:
+//     number of PCM16 samples written into output
+size_t micReadChunk(int16_t* output, size_t maxSamples, int32_t* peak);
