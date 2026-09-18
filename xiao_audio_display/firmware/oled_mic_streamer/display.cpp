@@ -12,6 +12,8 @@ constexpr int SCREEN_HEIGHT = 64;
 constexpr int VISIBLE_X = 28;
 constexpr int VISIBLE_Y = 24;
 constexpr int VISIBLE_WIDTH = 72;
+constexpr int VISIBLE_HEIGHT = 40;
+constexpr int TEXT_Y_OFFSET = 4;
 constexpr int CHAR_WIDTH = 6;
 constexpr int CHARS_PER_LINE = 10;
 constexpr int MAX_LINES = 4;
@@ -24,6 +26,19 @@ bool oledReady = false;
 uint8_t displayI2cStatus() {
   Wire.beginTransmission(OLED_ADDRESS);
   return Wire.endTransmission();
+}
+
+void flipVisibleImageVertically() {
+  for (int y = 0; y < VISIBLE_HEIGHT / 2; y++) {
+    int topY = VISIBLE_Y + y;
+    int bottomY = VISIBLE_Y + VISIBLE_HEIGHT - 1 - y;
+    for (int x = VISIBLE_X; x < VISIBLE_X + VISIBLE_WIDTH; x++) {
+      bool top = oled.getPixel(x, topY);
+      bool bottom = oled.getPixel(x, bottomY);
+      oled.drawPixel(x, topY, bottom ? SSD1306_WHITE : SSD1306_BLACK);
+      oled.drawPixel(x, bottomY, top ? SSD1306_WHITE : SSD1306_BLACK);
+    }
+  }
 }
 
 }  // namespace
@@ -109,8 +124,10 @@ void displayShowSentence(const String& sentence) {
   for (int i = 0; i < MAX_LINES; i++) {
     int lineWidth = lines[i].length() * CHAR_WIDTH;
     int x = VISIBLE_X + (VISIBLE_WIDTH - lineWidth) / 2;
-    oled.setCursor(x, VISIBLE_Y + i * LINE_HEIGHT);
+    oled.setCursor(x, VISIBLE_Y + TEXT_Y_OFFSET + i * LINE_HEIGHT);
     oled.print(lines[i]);
   }
+  // The lens flips the image vertically; reverse the visible pixels first.
+  flipVisibleImageVertically();
   oled.display();
 }
