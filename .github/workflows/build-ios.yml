@@ -1,0 +1,55 @@
+# Builds the TranscriberGlasses iPhone app on GitHub's free macOS runners and
+# uploads an UNSIGNED .ipa. Sign and install it from a Windows PC with
+# Sideloadly (or SideStore) using a free Apple ID - no Mac needed.
+name: Build iOS app (unsigned IPA)
+
+on:
+  workflow_dispatch:        # "Run workflow" button in the Actions tab
+  push:
+    branches: [main, iphone-deployment-windows]
+    paths:
+      - "TranscriberGlasses/**"
+      - ".github/workflows/build-ios.yml"
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      # The project was created in Xcode 26.6, so build with the same version.
+      - name: Select Xcode 26.6
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.6.app
+          xcodebuild -version
+
+      - name: Build (no code signing)
+        working-directory: TranscriberGlasses
+        run: |
+          xcodebuild \
+            -project TranscriberGlasses.xcodeproj \
+            -target TranscriberGlasses \
+            -configuration Release \
+            -sdk iphoneos \
+            SYMROOT="$PWD/build" \
+            IPHONEOS_DEPLOYMENT_TARGET=17.0 \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package .ipa
+        run: |
+          APP="TranscriberGlasses/build/Release-iphoneos/TranscriberGlasses.app"
+          test -d "$APP"
+          mkdir Payload
+          cp -R "$APP" Payload/
+          zip -qry TranscriberGlasses.ipa Payload
+          ls -lh TranscriberGlasses.ipa
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: TranscriberGlasses-unsigned-ipa
+          path: TranscriberGlasses.ipa
+          if-no-files-found: error
