@@ -8,7 +8,6 @@ Developed as a final-year Mechatronics Engineering project at the University of 
 
 - **End-to-End Latency:** ~600 ms
 - **Average Word Error Rate (WER):** <2% under tested conditions
-- **Audio Sampling Rate:** 16 kHz
 
 ## System Overview
 
