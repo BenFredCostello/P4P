@@ -63,6 +63,15 @@ final class BluetoothManager: NSObject, ObservableObject {
     private let textCharacteristicUUID =
         CBUUID(string: "87654321-4321-4321-4321-cba987654321")
 
+    // true:  the glasses show the same live text as the phone (finished and
+    //        interim words), scrolling up once the OLED is full.
+    // false: the glasses show only each finished (final) piece, as before.
+    private let mirrorLiveTextToGlasses = true
+
+    // Must match display.cpp in the ESP32 firmware.
+    private let oledCharsPerLine = 10
+    private let oledMaxLines = 4
+
     private let deepgramURL = URL(
         string:
             "wss://api.deepgram.com/v1/listen" +
@@ -84,6 +93,20 @@ final class BluetoothManager: NSObject, ObservableObject {
     private var textCharacteristic: CBCharacteristic?
 
     private var reconnectWorkItem: DispatchWorkItem?
+
+    // Live glasses text: the newest text waiting to be written, and the
+    // last text written, so unchanged text is not sent again.
+    private var pendingGlassesText: Data?
+    private var lastSentGlassesText: Data?
+
+    // Finished text on the glasses since the screen was last wiped.
+    // The phone keeps the whole transcript; the glasses start fresh after
+    // each pause.
+    private var glassesTranscript = ""
+
+    // Set when Deepgram reports a pause (utterance_end_ms); the next new
+    // words wipe the glasses screen.
+    private var wipeGlassesOnNextWord = false
 
     // MARK: - Deepgram
 
@@ -613,6 +636,22 @@ final class BluetoothManager: NSObject, ObservableObject {
             data = nil
         }
 
+        // Deepgram sends UtteranceEnd after no words for utterance_end_ms.
+        if
+            let data,
+            let event =
+                try? JSONDecoder().decode(
+                    DeepgramEvent.self,
+                    from: data
+                ),
+            event.type == "UtteranceEnd"
+        {
+            DispatchQueue.main.async { [weak self] in
+                self?.wipeGlassesOnNextWord = true
+            }
+            return
+        }
+
         guard
             let data,
             let response =
@@ -636,10 +675,20 @@ final class BluetoothManager: NSObject, ObservableObject {
                 return
             }
 
+            // The first new words after a pause replace the whole screen.
+            if self.wipeGlassesOnNextWord && !text.isEmpty {
+                self.glassesTranscript = ""
+                self.wipeGlassesOnNextWord = false
+            }
+
             if response.isFinal {
 
                 guard !text.isEmpty else {
                     self.interimTranscript = ""
+
+                    if self.mirrorLiveTextToGlasses {
+                        self.sendLiveTextToESP()
+                    }
                     return
                 }
 
@@ -651,12 +700,25 @@ final class BluetoothManager: NSObject, ObservableObject {
 
                 self.interimTranscript = ""
 
-                self.sendFinalTranscriptToESP(text)
+                if self.glassesTranscript.isEmpty {
+                    self.glassesTranscript = text
+                } else {
+                    self.glassesTranscript += " \(text)"
+                }
+
+                if self.mirrorLiveTextToGlasses {
+                    self.sendLiveTextToESP()
+                } else {
+                    self.sendFinalTranscriptToESP(text)
+                }
 
             } else {
 
                 self.interimTranscript = text
 
+                if self.mirrorLiveTextToGlasses {
+                    self.sendLiveTextToESP()
+                }
             }
         }
     }
@@ -706,6 +768,119 @@ final class BluetoothManager: NSObject, ObservableObject {
         if payload.count < text.utf8.count {
             print("BLE final text truncated to fit one packet")
         }
+    }
+
+    // MARK: - Live text to glasses
+
+    // Called on the main queue whenever the phone's text changes.
+    private func sendLiveTextToESP() {
+        let liveText =
+            [glassesTranscript, interimTranscript]
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+
+        let text = oledVisibleText(liveText)
+
+        guard !text.isEmpty, text != lastSentGlassesText else {
+            return
+        }
+
+        // Only the newest text matters. If BLE is busy, this replaces any
+        // older text still waiting, and is written once BLE is ready.
+        pendingGlassesText = text
+
+        flushPendingGlassesText()
+    }
+
+    // Also called from peripheralIsReady(toSendWriteWithoutResponse:).
+    private func flushPendingGlassesText() {
+        guard
+            let text = pendingGlassesText,
+            let audioPeripheral,
+            audioPeripheral.state == .connected,
+            let textCharacteristic,
+            textCharacteristic.properties.contains(.writeWithoutResponse),
+            audioPeripheral.canSendWriteWithoutResponse
+        else {
+            return
+        }
+
+        let maxLength = min(
+            180,
+            audioPeripheral.maximumWriteValueLength(for: .withoutResponse)
+        )
+
+        // Four OLED lines are only about 40 bytes, so this should not happen.
+        guard text.count <= maxLength else {
+            print("BLE live text skipped: \(text.count) bytes does not fit one packet")
+            pendingGlassesText = nil
+            return
+        }
+
+        audioPeripheral.writeValue(
+            text,
+            for: textCharacteristic,
+            type: .withoutResponse
+        )
+
+        pendingGlassesText = nil
+        lastSentGlassesText = text
+    }
+
+    // Returns the end of `text` that fills the OLED's bottom lines.
+    //
+    // This copies the line splitting in display.cpp, working in bytes as the
+    // ESP32 does: words split at spaces, 10 characters per line, and a word
+    // that does not fit is cut with a hyphen if at least 3 characters of room
+    // are left. The text is cut where a line starts, so the ESP32 splits it
+    // into the same lines and it always fits on the 4 lines.
+    private func oledVisibleText(_ text: String) -> Data {
+        let bytes = Array(text.utf8)
+        let space = UInt8(ascii: " ")
+
+        var lineStarts = [0]
+        var lineLength = 0
+        var position = 0
+
+        while position < bytes.count {
+            while position < bytes.count && bytes[position] == space {
+                position += 1
+            }
+            if position >= bytes.count {
+                break
+            }
+
+            var wordEnd = position
+            while wordEnd < bytes.count && bytes[wordEnd] != space {
+                wordEnd += 1
+            }
+
+            let wordLength = wordEnd - position
+            let separator = lineLength > 0 ? 1 : 0
+            let freeChars = oledCharsPerLine - lineLength
+
+            if wordLength + separator <= freeChars {
+                lineLength += separator + wordLength
+                position = wordEnd
+            } else {
+                let room = freeChars - separator
+                if room >= 3 {
+                    // The ESP32 draws the first part of the word plus "-".
+                    position += room - 1
+                }
+
+                lineStarts.append(position)
+                lineLength = 0
+            }
+        }
+
+        guard lineStarts.count > oledMaxLines else {
+            return Data(bytes)
+        }
+
+        let start = lineStarts[lineStarts.count - oledMaxLines]
+
+        return Data(bytes[start...])
     }
 }
 
@@ -801,6 +976,10 @@ extension BluetoothManager:
 
         audioCharacteristic = nil
         textCharacteristic = nil
+
+        // Send the glasses fresh text after reconnecting.
+        pendingGlassesText = nil
+        lastSentGlassesText = nil
 
         // BLE and Deepgram are independent.
         //
@@ -956,6 +1135,13 @@ extension BluetoothManager:
         startDeepgram()
     }
 
+    // BLE has room again after a write without response was held back.
+    func peripheralIsReady(
+        toSendWriteWithoutResponse peripheral: CBPeripheral
+    ) {
+        flushPendingGlassesText()
+    }
+
     func peripheral(
         _ peripheral: CBPeripheral,
         didUpdateValueFor characteristic: CBCharacteristic,
@@ -991,6 +1177,12 @@ extension BluetoothManager:
 
 
 // MARK: - Deepgram JSON models
+
+private struct DeepgramEvent:
+    Decodable {
+
+    let type: String
+}
 
 private struct DeepgramResponse:
     Decodable {

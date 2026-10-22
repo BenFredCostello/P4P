@@ -106,11 +106,11 @@ bool containsToday(const char* text) {
     const char* start = text;
     while (*text && isalpha(static_cast<unsigned char>(*text))) ++text;
     if (text - start == 5 &&
-        tolower(static_cast<unsigned char>(start[0])) == 's' &&
-        tolower(static_cast<unsigned char>(start[1])) == 't' &&
-        tolower(static_cast<unsigned char>(start[2])) == 'o' &&
-        tolower(static_cast<unsigned char>(start[3])) == 'r' &&
-        tolower(static_cast<unsigned char>(start[4])) == 'e') return true;
+        tolower(static_cast<unsigned char>(start[0])) == 'h' &&
+        tolower(static_cast<unsigned char>(start[1])) == 'e' &&
+        tolower(static_cast<unsigned char>(start[2])) == 'l' &&
+        tolower(static_cast<unsigned char>(start[3])) == 'l' &&
+        tolower(static_cast<unsigned char>(start[4])) == 'o') return true;
   }
   return false;
 }
